@@ -2,7 +2,7 @@
 
 Claude Code skills contributed by the Joybuy product & design community. These are general-purpose workflows — PRD writing, meeting translation, and more — that anyone on the team can install into their local Claude Code setup.
 
-For the core FigWatch Figma-audit skills (`@tone`, `@ux`), see [`joybuy-claude-skills`](https://github.com/Joybuy-Experience-Design/joybuy-claude-skills).
+For the core FigWatch Figma-audit skills (`@tone`, `@ux`), see [`joybuy-figwatch-skills`](https://github.com/Joybuy-Experience-Design/joybuy-figwatch-skills).
 
 ## Skills
 
