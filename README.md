@@ -52,4 +52,4 @@ bash install.sh
 
 ## Contributing
 
-This repo is maintained by a single admin — open an issue or message the maintainer directly if you'd like to add a new skill or improve an existing one. External commits are not accepted, but suggestions are welcome.
+This repo is maintained by Olivia — open an issue or message Olivia directly if you'd like to add a new skill or improve an existing one. External commits are not accepted, but suggestions are welcome.
