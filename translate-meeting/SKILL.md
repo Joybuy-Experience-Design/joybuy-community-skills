@@ -1,13 +1,13 @@
 ---
 name: translate-meeting
-description: Extract, translate, and summarize a JoyMinutes meeting transcript from Chinese to English. Navigates to the meeting URL, switches to the Text Record tab, extracts the full transcript, translates it, and creates a translated transcript file and a summary file.
+description: Extract, translate, and summarize a JoyMinutes meeting. Intercepts three known JoyMinutes API responses (transcript, speaker timelines, meeting detail) in one shot — no scrolling, no get_page_text. Produces a translated transcript file and a cultural-context summary file in British English.
 argument-hint: <joyminutes-url>
-allowed-tools: Bash, Read, Write, AskUserQuestion, mcp__Claude_in_Chrome__tabs_context_mcp, mcp__Claude_in_Chrome__tabs_create_mcp, mcp__Claude_in_Chrome__navigate, mcp__Claude_in_Chrome__find, mcp__Claude_in_Chrome__computer, mcp__Claude_in_Chrome__get_page_text
+allowed-tools: Read, Write, AskUserQuestion, mcp__Claude_in_Chrome__tabs_context_mcp, mcp__Claude_in_Chrome__tabs_create_mcp, mcp__Claude_in_Chrome__navigate, mcp__Claude_in_Chrome__find, mcp__Claude_in_Chrome__read_network_requests
 ---
 
 # JoyMinutes Meeting Translator
 
-Extract, translate, and summarize a JoyMinutes (joyminutes.jd.com) meeting transcript.
+Extracts a JoyMinutes meeting transcript via direct API interception, then translates it to British English with cultural-context notes.
 
 **Prerequisites:**
 - Logged into joyminutes.jd.com in Chrome
@@ -26,69 +26,70 @@ Read `~/.translate-meeting-config.json`.
 1. `tabs_context_mcp` with `createIfEmpty: true`
 2. `tabs_create_mcp` — new tab
 3. `navigate` to `$ARGUMENTS`
-4. Wait ~5 seconds, then **take a screenshot** to verify the page loaded and you're not on a login screen.
-   - If you see a login page, tell the user: "Please log into joyminutes.jd.com in Chrome first, then try again."
+4. Wait ~5 seconds for the page to load.
+5. If you detect a login page instead of a meeting, tell the user: "Please log into joyminutes.jd.com in Chrome first, then try again." and stop.
 
-## Step 3: Ensure Original Text & Switch to Text Record
+## Step 3: Ensure "Original text" and Open Text Record Tab
 
-**CRITICAL — Verify "Original text" is selected:**
-1. Look at the top-right area of the page for a **"Translate"** button/dropdown.
-2. Click it to open the dropdown. The options are: Original text, 简体中文, English, Français, Español, 日本語, Deutsch, Nederlands, بالعربية.
-3. If "Original text" does NOT have a checkmark (✓), click "Original text" to select it.
-4. Click elsewhere to close the dropdown.
+Switching to the Text Record tab is what triggers the API calls we want to intercept — it must happen.
 
-**Why:** We want the raw speech-to-text output, NOT JoyAI's machine translation. Claude will do the translation properly.
+1. Open the "Translate" dropdown (top-right). Options: Original text, 简体中文, English, ... If "Original text" isn't ticked, click it.
+2. Click elsewhere to close the dropdown.
+3. Click the **"Text Record"** tab in the right panel (use `find` if needed).
+4. Wait 3–5 seconds for the network requests to complete.
 
-**Switch to Text Record tab:**
-5. The page has two tabs on the right panel: "AI Summary" (default, active) and **"Text Record"**.
-6. Use `find` to locate "Text Record" and click it, OR click it directly — it's in the right panel header area.
-7. Wait 2-3 seconds for transcript content to load.
-8. Take a screenshot to confirm the transcript is visible (you should see speaker names, timestamps, and text).
+**Why "Original text":** we want the raw speech-to-text output, not JoyAI's machine translation. Claude will do the translation properly.
 
-## Step 4: Scroll to Load All Content
+## Step 4: Intercept the Three JoyMinutes API Responses
 
-The transcript may be lazy-loaded or virtualized. Scroll the right-side transcript panel to trigger loading:
-1. Use `computer` with `scroll_down` on the right side of the page (coordinate ~[1100, 400]).
-2. Repeat scrolling until no new content appears (typically 5-15 scrolls depending on meeting length).
-3. The transcript is fully loaded when you reach the last speaker entry (usually a short goodbye message).
+JoyMinutes' SPA fires three known API calls when the Text Record tab opens. All three go through `api.m.jd.com/api?functionId=<id>`. Grab their responses with three targeted `read_network_requests` calls using the `urlPattern` filter so you only get the one matching request each time — not the whole ~100-request list.
 
-## Step 5: Extract Full Page Text
+| Call | `urlPattern` | What's in the response |
+|---|---|---|
+| **Transcript** | `minutes.meetingrecord.query` | Every speaker turn: text, start time, speaker id |
+| **Speaker timeline** | `minutes.speakers.timelines` | Canonical speaker-id-to-name mapping — use this for accurate speaker attribution |
+| **Meeting detail** | `minutes.detail` | Title, date, duration, participants, AI summary, chapter breakdown |
 
-Call `get_page_text` once. This captures everything on the page in a single efficient call.
+**Do not call `get_page_text`. Do not scroll the transcript panel.**
 
-**How to parse the output — the page text contains these sections in order:**
+Steps:
 
-1. **HEADER** — Title, date (YYYY/M/D HH:MM), duration, "Translate", "Share"
-2. **SPEAKERS** — "Speakers(N)" followed by names and speaking percentages (e.g. "龙泉71%")
-3. **AI SUMMARY** — Chinese summary text, chapter headings with timestamps, and task list ("【Meeting Todos】")
-4. **>>> TRANSCRIPT <<<** — The section we need. Starts after the AI Summary/Tasks section. Entries are concatenated as:
-   ```
-   SpeakerNameHH:MM:SStranscript text here...SpeakerNameHH:MM:SSnext entry...
-   ```
-   There is NO space or newline between the speaker name and timestamp, or between entries. Use the `HH:MM:SS` timestamp pattern to identify entry boundaries.
-5. **FOOTER** — Starts with "Return to current speaking position" followed by "System.import" lines and Chinese marketing text about "慧记". **Stop parsing here.**
+1. `read_network_requests` with `urlPattern: "minutes.meetingrecord.query"` → take the response body
+2. `read_network_requests` with `urlPattern: "minutes.speakers.timelines"` → take the response body
+3. `read_network_requests` with `urlPattern: "minutes.detail"` → take the response body
 
-**Entry boundary pattern:** Each new entry starts with a speaker name immediately followed by `HH:MM:SS`. Speaker names can be:
-- Chinese characters: `龙泉`, `李冰(Teresa)`
-- English names: `Olly Boon`
-- Mixed: `ChineseName(EnglishName)`
+If any of the three returns zero results, wait 3 seconds and retry once. If still zero after retry, stop and tell the user: **"JoyMinutes function ID `<name>` returned no matches. The API may have been renamed. Please check the network tab in Chrome DevTools for the correct endpoint and update SKILL.md."** Do not fall back to scraping — that's what this rewrite was meant to eliminate.
 
-Use regex like `(?=(?:[\u4e00-\u9fff].+?|[A-Z][a-z]+ [A-Z][a-z]+.*?)\d{2}:\d{2}:\d{2})` to split entries, or identify them by the timestamp pattern.
+## Step 5: Parse the Three JSON Responses
 
-## Step 6: Validate
+**From `minutes.meetingrecord.query`:** normalize into a flat list of `{speakerId, startTime, text}`. The response is typically wrapped as `{code, data: {records: [...]}}` or similar — recurse into fields named `data`, `records`, `sentences`, `items`, `list`, `content` to find the array of turns. Each turn has a speaker identifier (`speakerId`, `speaker`, `userId`, `userName`) and a start time (`startTime`, `beginTime`, `timestamp` — may be ms or seconds since meeting start; divide by 1000 if > 1e7, format as `HH:MM:SS`) and text (`text`, `content`, `sentence`).
+
+**From `minutes.speakers.timelines`:** build a `speakerId → {name, chineseName, englishName, speakingPercentage}` map. Use this to look up the canonical name for each entry. This is the diarization data — always prefer it over guessing from the transcript text.
+
+**From `minutes.detail`:** extract `title`, `startTime` / `date`, `duration`, `participants` (array of names). Keep the AI-generated summary text if present — it's useful seed material for **§ Summary file**, but you still write your own summary with the cultural-context additions.
+
+## Step 6: Attach Speaker Names
+
+For each entry from `minutes.meetingrecord.query`, look up its `speakerId` in the speaker map from `minutes.speakers.timelines` and attach the canonical name. If a speaker id has no entry in the map, fall back to whatever name field the transcript response carried, or `Unknown` as last resort.
+
+## Step 7: Validate
 
 Count speaker entries. Report: **"Extracted [N] entries from '[title]' ([date], [duration]). Translating now..."**
 
-- If 0 entries: ask user to check login, meeting has transcript, and Text Record tab is visible
-- If fewer than expected for the meeting duration (~2-3 entries per minute is typical): scrolling may not have loaded everything. Go back and scroll more.
+If 0 entries: tell the user the transcript appears empty — either the meeting has no recording, or the user isn't authenticated to view it. Ask them to verify in Chrome.
 
-## Step 7: Translate
+## Step 8: Translate → **§ Translation rules**
+
+## Step 9: Write files → **§ Transcript file** and **§ Summary file**
+
+---
+
+## § Translation rules
 
 The transcript is speech-to-text from meetings conducted primarily in Chinese with some English. STT quality varies — expect garbled text, mixed languages, and mistranscribed words.
 
-**Translation rules:**
 1. **Faithful translation** — translate what was said, preserving conversational flow. Keep English portions as-is. Translate Chinese portions to English.
-2. **Speaker names** — first occurrence: "Pinyin (Characters)" e.g. "Long Quan (龙泉)". After that: Pinyin only. English names unchanged.
+2. **Speaker names** — first occurrence: `Pinyin (Characters)` e.g. `Long Quan (龙泉)`. After that: Pinyin only. English names unchanged.
 3. **Timestamps** — keep as-is.
 4. **STT corrections** — fix obvious speech-to-text errors with inline notes: `[STT: "放针" → "反正" (anyway)]`
 5. **Translator's notes** — add `[TN: ...]` for:
@@ -96,27 +97,30 @@ The transcript is speech-to-text from meetings conducted primarily in Chinese wi
    - Expressions where literal and intended meaning differ significantly
    - Polite hedging that masks disagreement or refusal
    - Language switches mid-sentence (note why the speaker switched)
-6. **Preserve filler words** — "嗯", "呃", "哎" etc. show speaker confidence/hesitation.
-7. **Language switches** — when someone switches languages (e.g. "不好意思，我直接用中文吧"), mark it clearly.
+6. **Preserve filler words** — `嗯`, `呃`, `哎` etc. show speaker confidence/hesitation.
+7. **Language switches** — when someone switches languages (e.g. `不好意思，我直接用中文吧`), mark it clearly.
+8. **British English only** — all English output that you generate (transcript body, translator's notes, STT corrections, summary, cultural notes, action items) uses British spelling and vocabulary throughout. Examples: `organise` not `organize`, `colour` not `color`, `behaviour` not `behavior`, `centre` not `center`, `analyse` not `analyze`, `realise` not `realize`, `recognised` not `recognized`, `prioritise` not `prioritize`, `favourite` not `favorite`, `licence` (noun) / `license` (verb), `practise` (verb) / `practice` (noun), `programme` (general) / `program` (software only), `whilst` is fine. **Exception:** preserve speakers' original English verbatim — don't rewrite American spellings they actually said. British English applies only to text that you the translator are producing.
 
-**For long meetings (>30,000 characters of page text):**
+**For long meetings (>30,000 characters of transcript text):**
 - Translate in chunks of ~30 entries at a time
 - Write each translated chunk to the transcript file incrementally using append
 - After all chunks are translated, generate the summary from the completed transcript
 
-## Step 8: Write Transcript File
+---
+
+## § Transcript file
 
 Filename: `{outputDir}/YYYY-MM-DD_Meeting-Title_transcript.md`
-(Sanitize title: hyphens for spaces, remove special chars, max 50 chars)
+(Sanitise title: hyphens for spaces, remove special chars, max 50 chars)
 
 ```
 # [Full Meeting Title] — Full Transcript
 
 **Date:** YYYY-MM-DD
-**Duration:** [from page header]
+**Duration:** [from minutes.detail]
 **Participants:** [comma-separated, Pinyin (Characters) for Chinese names]
 **Source:** [meeting URL]
-**Translated from:** Chinese/English mix → English by Claude
+**Translated from:** Chinese/English mix → British English by Claude
 
 ---
 
@@ -127,7 +131,9 @@ Filename: `{outputDir}/YYYY-MM-DD_Meeting-Title_transcript.md`
 [Translated text]
 ```
 
-## Step 9: Write Summary File
+---
+
+## § Summary file
 
 Filename: `{outputDir}/YYYY-MM-DD_Meeting-Title_summary.md`
 
@@ -142,7 +148,7 @@ Filename: `{outputDir}/YYYY-MM-DD_Meeting-Title_summary.md`
 ---
 
 ## Key Discussion Points
-- [Main topics organized by theme, not chronologically]
+- [Main topics organised by theme, not chronologically]
 
 ## Decisions Made
 - [Concrete decisions that were agreed upon]
@@ -172,6 +178,8 @@ Filename: `{outputDir}/YYYY-MM-DD_Meeting-Title_summary.md`
 - [Participant dynamics and power relationships]
 - [Unspoken implications or implicit agreements]
 ```
+
+---
 
 ## Done
 
